@@ -1,0 +1,11 @@
+{ 
+    "name": "\"Alexej", 
+    "age" : 22,
+    "isProgrammer" : true,
+    "devices" : ["steamdeck", 
+                    {
+                        "cpu" : "Ryzen 5",
+                        "ram_gb": 16
+                    }
+                ]
+}

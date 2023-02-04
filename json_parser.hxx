@@ -1,3 +1,13 @@
+// Tento zdrojovy kod jsem vypracoval zcela samostatne bez cizi pomoci
+// Neokopiroval jsem ani neopsal jsem cizi zdrojove kody
+// Nikdo mi pri vypracovani neradil
+// Pokud nektery radek porusuje toto pravidlo je oznacen komentarem
+// NENI MOJE TVORBA
+// Poruseni techto pravidel se povazuje za podvod, ktery lze potrestat VYLOUCENIM ZE STUDIA
+// Alexej Fedorenko, učo 37676 
+
+#pragma once
+
 #include <string>
 #include <functional>
 #include <vector>
@@ -8,6 +18,8 @@
 #include <ranges>
 #include <algorithm>
 #include <stack>
+#include <fstream>
+#include <sstream>
 
 namespace arx
 {
@@ -115,7 +127,7 @@ namespace arx
         {
             if (this == &value)
                 return *this;
-            
+
             *this = value.Clone();
 
             return *this;
@@ -266,7 +278,6 @@ private:
         JsonValue Clone() const
         {
             JsonValue retVal;
-            retVal.m_value = m_value;
             retVal.m_type = m_type;
 
             switch(m_type)
@@ -281,6 +292,7 @@ private:
                     retVal.m_value.string_value = new std::string(*m_value.string_value);
                     break;
                 default:
+                    retVal.m_value = m_value;
                     break;
             }
 
@@ -341,14 +353,32 @@ private:
 
     class IJsonLexer;
     class IJsonParser;
+    class IJsonConverter;
 
     class Json final
     {                      
     public:
         Json() = default;
-        Json(Json && value) = default;
-        Json(const Json &value) = default;
 
+        /*move constructor*/
+        Json(Json && value)
+        {
+            using std::swap;
+            swap(m_json_obj, value.m_json_obj);     
+        }
+
+        /*copy constructor*/
+        Json(const Json &value)
+        {
+            m_json_obj = value.m_json_obj;
+        }
+
+        /**
+         * @brief Constructs Json object from known types
+         * 
+         * @tparam T that matches concept JsonDefaultType or is JsonSerialiazable (has FromJson function)
+         * @param value 
+         */
         template<typename T>
             requires JsonDefaultType<std::remove_cvref_t<T>> || JsonSerialiazable<std::remove_cvref_t<T>>
         Json(T && value)
@@ -356,11 +386,21 @@ private:
             Set<T>(std::forward<T>(value));
         }
 
+        /**
+         * @brief Special version of constructor that converts const char* to std::string
+         * 
+         * @param value text
+         */
         Json(const char *value)
         {
             m_json_obj.SetValue(std::string(value));
         }
 
+        /**
+         * @brief Makes possible to construct Json in jsonish/python style
+         * 
+         * @param js 
+         */
         Json(std::initializer_list<std::pair<std::string, Json>> js)
         {
             m_json_obj.SetValue<JsonObjectContainer>(JsonObjectContainer());
@@ -370,7 +410,7 @@ private:
         }
         
         /**
-         * @brief Special version of assignment for strings that automaticaly convert const char* to std::string
+         * @brief Special version of assignment that converts const char* to std::string
          * 
          * @param value text
          * @return Json& 
@@ -409,6 +449,11 @@ private:
             return *this;
         }
 
+        /**
+         * @brief Makes possible to assign object to Json in jsonish/python style
+         * 
+         * @param js 
+         */
         Json &operator=(std::initializer_list<std::pair<std::string, Json>> js)
         {
             Set<JsonObjectContainer>(JsonObjectContainer());
@@ -418,22 +463,50 @@ private:
 
             return *this;
         }
-
+        
+        /**
+         * @brief 
+         * 
+         * @throw JsonExpectionTypeError - if Json object is not a JsonObjectContainer
+         * @param key 
+         * @return const Json& 
+         */
         const Json &operator[](const std::string &key) const
         {
             return GetValueByKey(key);
         }
 
+        /**
+         * @brief 
+         * 
+         * @throw JsonExpectionTypeError - if Json object is not a JsonObjectContainer
+         * @param key 
+         * @return const Json& 
+         */
         Json &operator[](const std::string &key)
         {
             return GetValueByKey(key);
         }
 
+        /**
+         * @brief 
+         * 
+         * @throw JsonExpectionTypeError - if Json object is not an array
+         * @param key 
+         * @return const Json& 
+         */
         const Json &operator[](size_t index) const
         {
             return GetValueByIndex(index);
         }
 
+        /**
+         * @brief 
+         * 
+         * @throw JsonExpectionTypeError - if Json object is not an array
+         * @param key 
+         * @return const Json& 
+         */
         Json &operator[](size_t index)
         {
             return const_cast<Json&>(GetValueByIndex(index));
@@ -442,7 +515,7 @@ private:
         /**
          * @brief Get value from Json object
          * 
-         * @tparam T object that mets requirements of JsonDeserialiazable
+         * @tparam T object that mets requirements of JsonDefaultType
          * @return copy of value that is stored in Json
          */
         template<typename T>
@@ -452,6 +525,12 @@ private:
             return m_json_obj.GetValue<std::remove_cvref_t<T>>();
         }
 
+        /**
+         * @brief Get value from Json object
+         * 
+         * @tparam T object that mets requirements of JsonDeserialiazable
+         * @return copy of value that is stored in Json
+         */
         template<typename T>
             requires JsonDeserialiazable<std::remove_cvref_t<T>>
         auto Get() const
@@ -460,19 +539,37 @@ private:
             FromJson(*this, nonStandartValue);
             return nonStandartValue;
         }
+
+        /**
+         * @brief Get object stored in Json by const reference
+         * 
+         * @tparam T object that mets requirements of sonDefaultType
+         * @return const reference to value that is stored in Json
+         */
+        template<typename T>
+            requires JsonDefaultType<std::remove_cvref_t<T>>
+        std::add_lvalue_reference_t<std::add_const_t<T>> GetConstRef() const
+        {
+            return m_json_obj.GetValue<std::add_lvalue_reference_t<std::add_const_t<T>>>();
+        }
         
         /**
-         * @brief Set value to Json object
+         * @brief Special version of Set that converts const char* to std::string
          * 
-         * @tparam T object that mets requirements of JsonSerialiazable
-         * @param value value that we want to store
+         * @param value text
+         * @return Json& 
          */
-
         void Set(const char *value)
         {
             m_json_obj.SetValue(std::string(value));
         }
-
+        
+        /**
+         * @brief Set value to Json object
+         * 
+         * @tparam T object that mets requirements of JsonDefaultType
+         * @param value value that we want to store
+         */
         template<typename T>
             requires JsonDefaultType<std::remove_cvref_t<T>> 
         void Set(T && value)
@@ -480,6 +577,12 @@ private:
             m_json_obj.SetValue(std::forward<T>(value));
         }
 
+        /**
+         * @brief Set value to Json object
+         * 
+         * @tparam T object that mets requirements of JsonSerialiazable
+         * @param value value that we want to store
+         */
         template<typename T>
             requires JsonSerialiazable<std::remove_cvref_t<T>>
         void Set(T && value)
@@ -487,31 +590,110 @@ private:
             ToJson(*this, std::forward<T>(value));
         }
 
-        void push_back(const Json &obj)
+        /**
+         * @brief Adds object in the end of array
+         * @throw JsonExpectionTypeError if object is not array
+         * @param obj 
+         */
+        void PushBack(const Json &obj)
         {
             std::vector<Json> &array = m_json_obj.GetValue<std::vector<Json>&>();
             array.push_back(obj);
         }
 
-        void push_back(Json &&obj)
+        /**
+         * @brief Adds object in the end of array
+         * @throw JsonExpectionTypeError if object is not array
+         * @param obj
+         */
+        void PushBack(Json &&obj)
         {
             std::vector<Json> &array = m_json_obj.GetValue<std::vector<Json>&>();
-            array.push_back(obj);
+            array.push_back(std::move(obj));
         }
 
-        JsonValueType GetType() { return m_json_obj.GetType(); }
+        /**
+         * @brief Gets amount of objects that are contained in array or objectContainer
+         * @throw std::runtime_error if object is not an array/objectContainer
+         * @return size_t 
+         */
+        size_t Count() const
+        {
+            if (GetType() == JsonValueType::ARRAY)
+                return m_json_obj.GetValue<const std::vector<Json>&>().size();
+            else if (GetType() == JsonValueType::OBJECT_CONTAINER)
+                return m_json_obj.GetValue<const JsonObjectContainer&>().size();
+            else
+                throw std::runtime_error("not an array/object container");
 
+            return 0;
+
+        }
+
+        /**
+         * @brief Get the Type of object
+         * 
+         * @return JsonValueType 
+         */
+        JsonValueType GetType() const { return m_json_obj.GetType(); }
+
+        /**
+         * @brief Parses text and returns Json object.
+         * This version accept custom Json parser that matches interface IJsonParser
+         * 
+         * @param text 
+         * @param parser 
+         * @return Json 
+         */
         static Json Parse(const std::string &text, IJsonParser &parser);
+
+        /**
+         * @brief Parses text and returns Json object.
+         * This version accept custom Json lexer that matches interface IJsonLexer
+         * 
+         * @param text 
+         * @param lexer class that matches interface
+         * @return Json 
+         */
         static Json Parse(const std::string &text, IJsonLexer &lexer);
+
+        /**
+         * @brief Parses text and returns Json object.
+         * 
+         * @param text 
+         * @return Json 
+         */
         static Json Parse(const std::string &text);
-        
-                 
-    private:
+
+        /**
+         * @brief Loads json file, parses it and returns Json object
+         * 
+         * @param filename 
+         * @return Json 
+         */
+        static Json FromFile(const std::string &filename);
+
+        /**
+         * @brief Converts json object to json string
+         * This version accepts custom Converter that matches interface
+         * 
+         * @param j Json object
+         * @return std::string 
+         */ 
+        static std::string ToJsonStr(const Json &j, const IJsonConverter &convertor);
+
+        /**
+         * @brief Converts json object to json string
+         * 
+         * @param j Json object
+         * @return std::string 
+         */ 
+        static std::string ToJsonStr(const Json &j);
 
         /**
          * @brief Get value by string key
          * @throw JsonExpectionTypeError - if Json object is not an JsonObjectContainer
-         * @param index string key
+         * @param key string key
          * @return const Json& 
          */ 
         const Json &GetValueByKey(const std::string &key) const
@@ -520,6 +702,12 @@ private:
             return container.at(key);
         }
 
+        /**
+         * @brief Get value by string key
+         * @throw JsonExpectionTypeError - if Json object is not an JsonObjectContainer
+         * @param key string key
+         * @return Json& 
+         */ 
         Json &GetValueByKey(const std::string &key)
         {
             if (m_json_obj.GetType() == JsonValueType::NULL_OBJ)
@@ -534,9 +722,9 @@ private:
 
         /**
          * @brief Get value by index
-         * @throw JsonExpectionTypeError - if Json object is not an std::vector<Json>
+         * @throw JsonExpectionTypeError - if json object is not an std::vector<Json>
          * @param index unsigned integer
-         * @return Json& 
+         * @return const Json& 
          */
         const Json &GetValueByIndex(size_t index) const
         {
@@ -544,6 +732,12 @@ private:
             return array.at(index);
         }
 
+        /**
+         * @brief Get value by index
+         * @throw JsonExpectionTypeError - if Json object is not an std::vector<Json>
+         * @param index unsigned integer
+         * @return Json& 
+         */
         Json &GetValueByIndex(size_t index)
         {
             std::vector<Json> &array = m_json_obj.GetValue<std::vector<Json>&>();
@@ -559,7 +753,7 @@ private:
     {
     public:
 
-        StateMachine(uint beginState, std::initializer_list<typename std::map<uint, std::function<RetT(StateMachine<RetT, InstanceT, Ts...> &, Ts...)>>::value_type> transitions)
+        StateMachine(uint beginState, std::initializer_list<typename std::vector<std::function<RetT(StateMachine<RetT, InstanceT, Ts...> &, Ts...)>>::value_type> transitions)
             : m_transitions(std::move(transitions)), m_state(beginState), m_functor(m_transitions[m_state])
         {
         }
@@ -586,7 +780,7 @@ private:
         uint m_state;
         InstanceT *m_instance;
         
-        std::map<uint, std::function<RetT(StateMachine<RetT, InstanceT, Ts...> &, Ts...)>> m_transitions;
+        std::vector<std::function<RetT(StateMachine<RetT, InstanceT, Ts...> &, Ts...)>> m_transitions;
         std::function<RetT(StateMachine<RetT, InstanceT, Ts...> &, Ts...)> m_functor;
     };
 
@@ -595,7 +789,7 @@ private:
     {
     public:
 
-        StateMachine(uint beginState, std::initializer_list<typename std::map<uint, std::function<RetT(StateMachine<RetT, Ts...> &, Ts...)>>::value_type> transitions)
+        StateMachine(uint beginState, std::initializer_list<typename std::vector<std::function<RetT(StateMachine<RetT, Ts...> &, Ts...)>>::value_type> transitions)
             : m_transitions(transitions), m_state(beginState), m_functor(m_transitions[m_state])
         {
         }
@@ -611,27 +805,27 @@ private:
     private:
         uint m_state;
         
-        std::map<uint, std::function<RetT(StateMachine<RetT, Ts...> &, Ts...)>> m_transitions;
+        std::vector<std::function<RetT(StateMachine<RetT, Ts...> &, Ts...)>> m_transitions;
         std::function<RetT(StateMachine<RetT, Ts...> &, Ts...)> m_functor;
     };
 
-    template<typename T, typename Tfn, typename...Tsfn>
+    template<typename T, typename RetT, typename...Tsfn>
     class obj_fn_wrapper
     {
     public:
-        obj_fn_wrapper(T *instance, Tfn (T::*fn)(Tsfn...))
+        obj_fn_wrapper(T *instance, RetT (T::*fn)(Tsfn...))
             : m_instance(instance), m_function(fn)
         {
         }
 
-        Tfn operator()(Tsfn...parameters)
+        RetT operator()(Tsfn...parameters)
         {
            return ((*m_instance).*(m_function))(parameters...);
         }
 
     private:
         T *m_instance;
-        Tfn (T::*m_function)(Tsfn...);
+        RetT (T::*m_function)(Tsfn...);
     };
 
     template<typename T, typename...Tsfn>
@@ -657,48 +851,54 @@ private:
 
     enum LexerValueType
     {
-        OPEN_CURLY_BRACKET,
-        CLOSE_CURLY_BRACKET,
-        OPEN_SQUARE_BRACKET,
-        CLOSE_SQUARE_BRACKET,
-        SEPARATOR,
-        OPERATOR,
-        NUMBER,
-        FLOAT_NUMBER,
-        STRING,
-        IDENTIFIER,
-        BOOL,
-        NULLOBJ
+        OPEN_CURLY_BRACKET = 0, //'{'
+        CLOSE_CURLY_BRACKET, //'}'
+        OPEN_SQUARE_BRACKET, //'['
+        CLOSE_SQUARE_BRACKET, //']'
+        SEPARATOR, //',', not used 
+        OPERATOR, //':', not used
+        NUMBER, //digits
+        FLOAT_NUMBER, //digits with .
+        STRING, //string
+        IDENTIFIER, //string with alpha symbols, numbers or spaces
+        BOOL, //true or false
+        NULLOBJ //null
     };
 
     const char *LexerValueTypeStr(LexerValueType type)
     {
-        const char *valueTypeStr[]{"OPEN_CURLY_BRACKET", "CLOSE_CURLY_BRACKET",
-        "OPEN_SQUARE_BRACKET", "CLOSE_SQUARE_BRACKET",
-        "SEPARATOR", "OPERATOR", "NUMBER",
-        "FLOAT_NUMBER",
-        "STRING",
-        "IDENTIFIER",
-        "BOOL",
-        "NULL"};
+        const char *valueTypeStr[]{
+            "OPEN_CURLY_BRACKET", "CLOSE_CURLY_BRACKET",
+            "OPEN_SQUARE_BRACKET", "CLOSE_SQUARE_BRACKET",
+            "SEPARATOR", 
+            "OPERATOR",
+            "NUMBER",
+            "FLOAT_NUMBER",
+            "STRING",
+            "IDENTIFIER",
+            "BOOL",
+            "NULL"
+        };
 
-        return valueTypeStr[(int)type];
+        return valueTypeStr[type];
     }
 
     enum LexerState
     {
-        GET_INITIAL_BRACKET,
-        GET_IDENTIFIER_INIT,
-        GET_IDENTIFIER,
-        GET_OPERATOR,
-        GET_OBJ,
-        READ_STRING,
-        EXPANSION,
-        FINISH,
-        READ_INT,
-        READ_DOUBLE,
-        READ_NULL,
-        READ_BOOL
+        GET_INITIAL_BRACKET, // { or [
+        GET_IDENTIFIER_INIT, // first occurence of "
+        GET_IDENTIFIER, //accepts spaces and alpha symbols until finds another "
+        GET_OPERATOR, // :
+        GET_OBJ, //determines type of object by first letter
+        READ_STRING, //read string
+        READ_ESCAPE_CHARACTER, //read escape characters. only one character escape sequences are supported
+        EXPANSION, //expands array/object or finishes object/array (] or })
+        FINISH, //desired state
+        READ_INT, //read int
+        READ_DOUBLE, //read double
+        READ_NULL, //read null, case sensetive
+        READ_TRUE, //read true, case sensetive
+        READ_FALSE //read false, case sensetive
     };
 
     class JsonLexerExpection : public std::runtime_error
@@ -736,27 +936,31 @@ private:
             StateMachine<void, LexerArgs> stateMachine { 
                 GET_INITIAL_BRACKET,
                 {
-                    std::make_pair(GET_INITIAL_BRACKET, obj_fn_wrapper(this, &JsonLexer::GetInitialBracketHandler)),
-                    std::make_pair(GET_IDENTIFIER_INIT, obj_fn_wrapper(this, &JsonLexer::GetIdentifierInitHandler)),
-                    std::make_pair(GET_IDENTIFIER, obj_fn_wrapper(this, &JsonLexer::GetIdentifierHandler)),
-                    std::make_pair(GET_OPERATOR, obj_fn_wrapper(this, &JsonLexer::GetOperatorHandler)),
-                    std::make_pair(GET_OBJ, obj_fn_wrapper(this, &JsonLexer::GetObjHandler)),
-                    std::make_pair(READ_STRING, obj_fn_wrapper(this, &JsonLexer::ReadStringHandler)),
-                    std::make_pair(EXPANSION, obj_fn_wrapper(this, &JsonLexer::ExpansionHandler)),
-                    std::make_pair(FINISH, obj_fn_wrapper(this, &JsonLexer::FinishHandler)),
-                    std::make_pair(READ_INT, obj_fn_wrapper(this, &JsonLexer::ReadIntHandler)),
-                    std::make_pair(READ_DOUBLE,obj_fn_wrapper(this, &JsonLexer::ReadDoubleHandler)),
-                    std::make_pair(READ_NULL, obj_fn_wrapper(this, &JsonLexer::ReadNullHandler)),
-                    std::make_pair(READ_BOOL, obj_fn_wrapper(this, &JsonLexer::ReadBoolHandler)),
+                    obj_fn_wrapper(this, &JsonLexer::GetInitialBracketHandler),
+                    obj_fn_wrapper(this, &JsonLexer::GetIdentifierInitHandler),
+                    obj_fn_wrapper(this, &JsonLexer::GetIdentifierHandler),
+                    obj_fn_wrapper(this, &JsonLexer::GetOperatorHandler),
+                    obj_fn_wrapper(this, &JsonLexer::GetObjHandler),
+                    obj_fn_wrapper(this, &JsonLexer::ReadStringHandler),
+                    obj_fn_wrapper(this, &JsonLexer::ReadEscapeCharacterHandler),
+                    obj_fn_wrapper(this, &JsonLexer::ExpansionHandler),
+                    obj_fn_wrapper(this, &JsonLexer::FinishHandler),
+                    obj_fn_wrapper(this, &JsonLexer::ReadIntHandler),
+                    obj_fn_wrapper(this, &JsonLexer::ReadDoubleHandler),
+                    obj_fn_wrapper(this, &JsonLexer::ReadNullHandler),
+                    obj_fn_wrapper(this, &JsonLexer::ReadTrueHandler),
+                    obj_fn_wrapper(this, &JsonLexer::ReadFalseHandler)
                 }
             };
 
-            LexerState state = GET_INITIAL_BRACKET;
             LexerArgs args(tokens, token, valueHolders);
             stateMachine.SetInstance(&args);
 
             for (size_t i = 0; i < text.size(); i++)
             {
+#ifdef DEBUG_ARX_JSON_LEXER
+                std::cout << "symbol " << text[i] << ", current state " << stateMachine.GetState() << std::endl;
+#endif
                 args.readLetter = text[i];
                 stateMachine.Process();
             }
@@ -812,7 +1016,7 @@ private:
 
                 if (instance->readLetter == '"')
                     Store(stateMachine, IDENTIFIER, GET_OPERATOR);
-                else if (isalnum(instance->readLetter))
+                else if (isalnum(instance->readLetter) || instance->readLetter == '_')
                     instance->token += instance->readLetter ;
                 else
                     throw JsonLexerExpection(std::string("Expected character/number but got ") + instance->readLetter);
@@ -821,10 +1025,9 @@ private:
             void GetOperatorHandler(StateMachine<void, LexerArgs> &stateMachine)
             {
                 auto *instance = stateMachine.GetInstance();
-                instance->token += instance->readLetter;
 
                 if (instance->readLetter == ':')
-                    Store(stateMachine, OPERATOR, GET_OBJ);
+                    stateMachine.SetState(GET_OBJ);
                 else if (!isSkippable(instance->readLetter))
                     throw JsonLexerExpection(std::string("expected ':' but got ") + instance->readLetter);
             }
@@ -832,28 +1035,50 @@ private:
             void GetObjHandler(StateMachine<void, LexerArgs> &stateMachine)
             {
                 auto *instance = stateMachine.GetInstance();
-                instance->token += instance->readLetter;
                 
                 if (instance->readLetter == '{')
-                    Store(stateMachine, OPEN_CURLY_BRACKET, GET_IDENTIFIER_INIT);                 
-                else if (instance->readLetter == '[')
-                    Store(stateMachine, OPEN_SQUARE_BRACKET, GET_OBJ);
-                else if (instance->readLetter == ']')
-                    ExpansionHandler(stateMachine);
-                else if (instance->readLetter == '"')
                 {
-                    instance->token.clear();
-                    stateMachine.SetState(READ_STRING);
+                    instance->token += instance->readLetter;
+                    instance->valueHolders.push(OPEN_CURLY_BRACKET);
+                    Store(stateMachine, OPEN_CURLY_BRACKET, GET_IDENTIFIER_INIT);
+                }               
+                else if (instance->readLetter == '[')
+                {
+                    instance->token += instance->readLetter;
+                    instance->valueHolders.push(OPEN_SQUARE_BRACKET);
+                    Store(stateMachine, OPEN_SQUARE_BRACKET, GET_OBJ);
                 }
-                else if (instance->readLetter == 't' || instance->readLetter == 'f')
-                    stateMachine.SetState(READ_BOOL);
+                else if (instance->readLetter == ']')
+                {
+                    instance->token += instance->readLetter;
+                    ExpansionHandler(stateMachine);
+                }
+                else if (instance->readLetter == '"')
+                    stateMachine.SetState(READ_STRING);
+                else if (instance->readLetter == 't')
+                {
+                    instance->token += instance->readLetter;
+                    stateMachine.SetState(READ_TRUE);
+                }
+                else if (instance->readLetter == 'f')
+                {
+                    instance->token += instance->readLetter;
+                    stateMachine.SetState(READ_FALSE);
+                }
                 else if (instance->readLetter == 'n')
+                {
+                    instance->token += instance->readLetter;
                     stateMachine.SetState(READ_NULL);
+                }
                 else if (isdigit(instance->readLetter) || instance->readLetter == '-')
+                {
+                    instance->token += instance->readLetter;
                     stateMachine.SetState(READ_INT);
+                }
                 else if (!isSkippable(instance->readLetter))
                     throw JsonLexerExpection(std::string("Unexpected character ") + instance->readLetter);
             }
+
             void ReadStringHandler(StateMachine<void, LexerArgs> &stateMachine)
             {
                 auto *instance = stateMachine.GetInstance();
@@ -863,24 +1088,50 @@ private:
                     Store(stateMachine, STRING, EXPANSION);
                     return;
                 }
+                else if (instance->readLetter == '\\')
+                {
+                    stateMachine.SetState(READ_ESCAPE_CHARACTER);
+                    return;
+                }
 
                 instance->token += instance->readLetter;
+            }
+
+            void ReadEscapeCharacterHandler(StateMachine<void, LexerArgs> &stateMachine)
+            {
+                auto *instance = stateMachine.GetInstance();
+                const char characters[12]{ 'n', 't', 'b', 'r', 'a', '\'', '"', '?', '\\', 'f', 'v', '\0'};
+                const char escapeCharacters[12]{ '\n', '\t', '\b', '\r', '\a', '\'', '\"', '\?', '\\', '\f', '\v', '\0'};
+
+                for (size_t i = 0; i < (sizeof(characters) / sizeof(char)); i++)
+                {
+                    if (instance->readLetter == characters[i])
+                    {
+                        instance->token += escapeCharacters[i];
+                        stateMachine.SetState(READ_STRING);
+                        return;
+                    }
+                }
+
+                /*if not found*/
+                throw JsonLexerExpection("Invalid escape character");
             }
 
             void ExpansionHandler(StateMachine<void, LexerArgs> &stateMachine)
             {
                 auto *instance = stateMachine.GetInstance();
-                instance->token += instance->readLetter;
 
                 if (instance->readLetter == ',')
                 {
+                    instance->token.clear();
                     if (instance->valueHolders.top() == OPEN_CURLY_BRACKET)
-                        Store(stateMachine, SEPARATOR, GET_IDENTIFIER_INIT);
+                        stateMachine.SetState(GET_IDENTIFIER_INIT);
                     else
-                        Store(stateMachine, SEPARATOR, GET_OBJ);
+                        stateMachine.SetState(GET_OBJ);
                 }
                 else if (instance->readLetter == '}')
                 {
+                    instance->token += instance->readLetter;
                     if (instance->valueHolders.top() != OPEN_CURLY_BRACKET)
                        throw JsonLexerExpection("Brackets mismatch, expected ']'");
 
@@ -895,6 +1146,7 @@ private:
                 }
                 else if (instance->readLetter == ']')
                 {
+                    instance->token += instance->readLetter;
                     if (instance->valueHolders.top() != OPEN_SQUARE_BRACKET)
                         throw JsonLexerExpection("Brackets mismatch, expected '}'");
 
@@ -922,11 +1174,14 @@ private:
             {
                 auto *instance = stateMachine.GetInstance();
 
-                if (instance->readLetter == '.' && instance->token != "-")          
+                if (instance->readLetter == '.' && instance->token != "-") 
+                {
+                    instance->token += '.';
                     stateMachine.SetState(READ_DOUBLE);
+                }
                 else if (isSkippable(instance->readLetter) && instance->token != "-")
                     Store(stateMachine, NUMBER, EXPANSION);
-                else if (instance->readLetter == ']' || instance->readLetter == '}' && instance->token != "-")
+                else if ((instance->readLetter == ']' || instance->readLetter == '}' || instance->readLetter == ',') && instance->token != "-")
                 {
                     Store(stateMachine, NUMBER, EXPANSION);
                     ExpansionHandler(stateMachine);
@@ -945,7 +1200,7 @@ private:
 
                 if (isSkippable(instance->readLetter))
                     Store(stateMachine, FLOAT_NUMBER, EXPANSION);
-                else if (instance->readLetter == ']' || instance->readLetter == '}')
+                else if (instance->readLetter == ']' || instance->readLetter == '}' || instance->readLetter == ',')
                 {
                     Store(stateMachine, FLOAT_NUMBER, EXPANSION);
                     ExpansionHandler(stateMachine);
@@ -961,29 +1216,38 @@ private:
                 auto *instance = stateMachine.GetInstance();
                 const char *nullStr = "null";
                 instance->token += instance->readLetter;
+                size_t pos = instance->token.length() - 1;
 
-                if (instance->token[instance->token.length() - 1] != nullStr[instance->token.length() - 1])
-                    throw JsonLexerExpection(std::string("(NULLOBJ) Expected ") + nullStr[instance->token.length() - 1] + " but got " + instance->token[instance->token.length() - 1]);
+                if (instance->token[pos] != nullStr[pos])
+                    throw JsonLexerExpection(std::string("(NULLOBJ) Expected ") + nullStr[pos] + " but got " + instance->token[pos]);
                 else if (instance->token.length() == 4)
                      Store(stateMachine, NULLOBJ, EXPANSION);
             }
 
-            void ReadBoolHandler(StateMachine<void, LexerArgs> &stateMachine)
+            void ReadTrueHandler(StateMachine<void, LexerArgs> &stateMachine)
             {
-                static const char *trueStr = "true";
-                static const char *falseStr = "false";
+                const char *trueStr = "true";
                 auto *instance = stateMachine.GetInstance();
-                size_t pos = instance->token.length() - 1;
                 instance->token += instance->readLetter;
+                size_t pos = instance->token.length() - 1;
 
-                if (instance->token[pos] == trueStr[pos] && pos < 5)
-                    if (instance->token.length() == 4)
-                        Store(stateMachine, BOOL, EXPANSION);
-                else if (instance->token[pos] == falseStr[pos])
-                    if (instance->token.length() == 5)
-                        Store(stateMachine, BOOL, EXPANSION);
-                else
-                    throw JsonLexerExpection("Expected bool");
+                if (instance->token[pos] != trueStr[pos])
+                    throw JsonLexerExpection("(BOOL) Expected true");
+                else if (instance->token.length() == 4)
+                    Store(stateMachine, BOOL, EXPANSION);
+            }
+
+            void ReadFalseHandler(StateMachine<void, LexerArgs> &stateMachine)
+            {
+                const char *falseStr = "false";
+                auto *instance = stateMachine.GetInstance();
+                instance->token += instance->readLetter;
+                size_t pos = instance->token.length() - 1;
+
+                if (instance->token[pos] != falseStr[pos])
+                    throw JsonLexerExpection("(BOOL) Expected false");
+                else if (instance->token.length() == 5)
+                    Store(stateMachine, BOOL, EXPANSION);
             }
 
             /**
@@ -1025,41 +1289,42 @@ private:
 
             for (auto &[valType, val] : tokens)
             {
-#ifdef DEBUG_PARSER
+#ifdef DEBUG_ARX_JSON_PARSER
                 std::cout << LexerValueTypeStr(valType) << std::endl;
 #endif
-
                 switch(valType)
                 {
                     case OPEN_CURLY_BRACKET:
-                        currentObj->Set(JsonObjectContainer{});
+                        if (currentObj->GetType() == JsonValueType::ARRAY) 
+                        {
+                            currentObj->PushBack(Json{ });
+                            currentObj = &currentObj->operator[](currentObj->Count() - 1);
+                        }
+                        currentObj->Set(JsonObjectContainer{ });
                         topLevelObjects.push(currentObj);
                         break;
                     case CLOSE_CURLY_BRACKET:
                         topLevelObjects.pop();
-                        if (!topLevelObjects.empty())    
-                        {
-                            if (topLevelObjects.top()->GetType() == JsonValueType::ARRAY)
-                                topLevelObjects.top()->push_back(std::move(*currentObj));                 
+                        if (!topLevelObjects.empty())                  
                             currentObj = topLevelObjects.top();
-                        }
                         break;
                     case OPEN_SQUARE_BRACKET:
+                        if (currentObj->GetType() == JsonValueType::ARRAY) 
+                        {
+                            currentObj->PushBack(Json{ });
+                            currentObj = &currentObj->operator[](currentObj->Count() - 1);
+                        }
                         currentObj->Set(std::vector<Json>{});
                         topLevelObjects.push(currentObj);
                         break;
                     case CLOSE_SQUARE_BRACKET:
                         topLevelObjects.pop();
                         if (!topLevelObjects.empty())
-                        {
-                            if (topLevelObjects.top()->GetType() == JsonValueType::ARRAY)
-                                topLevelObjects.top()->push_back(std::move(*currentObj));
                             currentObj = topLevelObjects.top();
-                        }
                         break;
                     case NUMBER:
                         if (topLevelObjects.top()->GetType() == JsonValueType::ARRAY)
-                            currentObj->push_back(Json(std::stol(val)));
+                            currentObj->PushBack(Json(std::stol(val)));
                         else
                         {
                             currentObj->Set(std::stoi(val));
@@ -1068,7 +1333,7 @@ private:
                         break;
                     case STRING:
                         if (topLevelObjects.top()->GetType() == JsonValueType::ARRAY)
-                            currentObj->push_back(Json(std::move(val)));
+                            currentObj->PushBack(Json(std::move(val)));
                         else
                         {
                             currentObj->Set(val);
@@ -1077,7 +1342,7 @@ private:
                         break;
                     case FLOAT_NUMBER:
                         if (topLevelObjects.top()->GetType() == JsonValueType::ARRAY)
-                            currentObj->push_back(Json(std::stod(val)));
+                            currentObj->PushBack(Json(std::stod(val)));
                         else
                         {
                             currentObj->Set(std::stod(val));
@@ -1086,7 +1351,7 @@ private:
                         break;
                     case BOOL:
                         if (topLevelObjects.top()->GetType() == JsonValueType::ARRAY)
-                            currentObj->push_back(Json((val == "true") ? true : false));
+                            currentObj->PushBack(Json((val == "true") ? true : false));
                         else
                         {
                             currentObj->Set((val == "true") ? true : false);
@@ -1095,7 +1360,7 @@ private:
                         break;
                     case NULLOBJ:
                         if (topLevelObjects.top()->GetType() == JsonValueType::ARRAY)
-                            currentObj->push_back(Json(nullptr));
+                            currentObj->PushBack(Json(nullptr));
                         else
                         {
                             currentObj->Set(nullptr);
@@ -1106,7 +1371,7 @@ private:
                         currentObj = &currentObj->operator[](val);
                         break;
                     default:
-                        //throw std::runtime_error("JsonParser unexpected error");
+                        throw std::runtime_error("JsonParser unexpected error");
                         break;
                 }
             }
@@ -1131,5 +1396,111 @@ private:
     {
         JsonLexer defaultLexer;
         return JsonParser(defaultLexer).Parse(text);
+    }
+
+    /* static */ Json Json::FromFile(const std::string &filename)
+    {
+        std::ifstream file;
+        file.exceptions(std::fstream::failbit | std::fstream::badbit);
+        file.open(filename);
+        std::stringstream strStream;
+        strStream << file.rdbuf();
+
+        return Parse(strStream.str());
+    }
+
+    class IJsonConverter
+    {
+    public:
+        virtual std::string ToJsonStr(const Json &j) const = 0;
+    };
+
+    class JsonConvertor : public IJsonConverter
+    {
+    public:
+
+        std::string ToJsonStr(const Json &j) const
+        {
+            return ToJsonStrRec(j, 0);
+        }
+
+    private:
+        std::string ToJsonStrRec(const Json &j, uint depth) const
+        {
+            std::string retVal;
+            switch(j.GetType())
+            {
+                case JsonValueType::NULL_OBJ:
+                    retVal += "null";
+                    break;
+                case JsonValueType::BOOL:
+                    retVal += j.Get<bool>() ? "true" : "false";
+                    break;
+                case JsonValueType::UINT:
+                    retVal +=  std::to_string(j.Get<uint>());
+                    break;
+                case JsonValueType::INT:
+                    retVal +=  std::to_string(j.Get<int>());
+                    break;
+                case JsonValueType::FLOATING:
+                    retVal +=  std::to_string(j.Get<double>());
+                    break;
+                case JsonValueType::OBJECT_CONTAINER:
+                    {
+                        retVal += "{";
+                        retVal += '\n';
+                        uint counter = 0;
+                        for (const auto &[key, storedObject] : j.GetConstRef<JsonObjectContainer>())
+                        {
+                            retVal += std::string(depth + 1, '\t');
+                            retVal += '"' + key + '"' + ": ";
+                            retVal += ToJsonStrRec(storedObject, depth + 1);
+
+                            if (counter + 1 != j.Count())
+                                retVal += ',';
+
+                            retVal += '\n';
+
+                            counter++;
+
+                        }
+                        retVal += std::string(depth, '\t') + "}" + "\n";
+                    }
+                    break;
+                case JsonValueType::ARRAY:
+                    {
+                        retVal += "[";
+                        uint counter = 0;
+                        for (const auto &storedObject : j.GetConstRef<std::vector<Json>>())
+                        {
+                            retVal += ToJsonStrRec(storedObject, depth + 1);
+                            if (counter + 1 != j.Count())
+                                retVal += ", ";
+                            
+                            counter++;
+                        }
+                        retVal += std::string(depth, '\t') + "]";
+                    }
+                    break;
+                case JsonValueType::STRING:
+                    retVal +=  std::string("\"") + j.Get<std::string>() + "\"";
+                    break;
+                default:
+                    break;
+            }
+
+            return retVal;
+        }
+    };
+
+    /* static */ std::string Json::ToJsonStr(const Json &j, const IJsonConverter &convertor)
+    {
+        return convertor.ToJsonStr(j);
+    }
+
+    /* static */ std::string Json::ToJsonStr(const Json &j)
+    {
+        JsonConvertor defaultConvertor;
+        return defaultConvertor.ToJsonStr(j);
     }
 }
